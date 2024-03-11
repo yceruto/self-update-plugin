@@ -120,12 +120,7 @@ class SelfUpdateCommand extends BaseCommand
                 $package = reset($packages);
             }
 
-            $io->writeError('<info>Found multiple matches, selected '.$package->getPrettyString().'.</info>');
-            $io->writeError(
-                'Alternatives were '.implode(', ', array_map(static function ($p): string {
-                    return $p->getPrettyString();
-                }, $packages)).'.'
-            );
+            $io->writeError('<comment>Found multiple matches, selected '.$package->getPrettyString().'.</comment>');
             $io->writeError('<comment>Please use a more specific constraint to pick a different package.</comment>');
         } elseif (count($packages) === 1) {
             $package = reset($packages);
