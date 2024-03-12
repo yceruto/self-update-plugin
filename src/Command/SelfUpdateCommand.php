@@ -5,6 +5,7 @@ namespace Yceruto\SelfUpdatePlugin\Command;
 use Composer\Command\BaseCommand;
 use Composer\Factory;
 use Composer\IO\IOInterface;
+use Composer\Json\JsonFile;
 use Composer\Package\BasePackage;
 use Composer\Package\CompletePackageInterface;
 use Composer\Package\Version\VersionParser;
@@ -40,13 +41,17 @@ class SelfUpdateCommand extends BaseCommand
 
         $extra = $composer->getPackage()->getExtra();
         $packageName = $extra['self-update-plugin']['package'] ?? $composer->getPackage()->getName();
-        $packageVersion = $extra['self-update-plugin']['require'] ?? 'dev-main';
+        $packageVersion = $extra['self-update-plugin']['require'] ?? null;
         $packageDir = realpath(dirname(Factory::getComposerFile()));
 
         if (!$packageName || '__root__' === $packageName) {
-            $io->writeError(
-                'Unable to determine the package name. Please, add "extra.self-update-plugin.package" config to your composer.json file and try again.'
-            );
+            $io->writeError('Unable to determine the package name. Please, add "extra.self-update-plugin.package" config to your composer.json file and try again.');
+
+            return self::FAILURE;
+        }
+
+        if (!$packageVersion) {
+            $io->writeError('Unable to determine the package require version. Please, add "extra.self-update-plugin.require" config to your composer.json file and try again.');
 
             return self::FAILURE;
         }
@@ -67,17 +72,41 @@ class SelfUpdateCommand extends BaseCommand
             return self::FAILURE;
         }
 
+        $packageLockFile = new JsonFile(
+            path: $packageDir.DIRECTORY_SEPARATOR.substr($packageName, strpos($packageName, '/') + 1).'.lock',
+            io: $io,
+        );
+
+        if ($packageLockFile->exists()) {
+            $lock = $packageLockFile->read();
+
+            if ($package->getName() === $packageName && $package->getVersion() === ($lock['version'] ?? false)) {
+                $io->writeError(sprintf('Project is already patched with version <info>%s</info> for <info>%s</info>', $package->getPrettyVersion(), $package->getName()));
+
+                return self::SUCCESS;
+            }
+        }
+
         $filePath = $composer->getArchiveManager()->archive($package, $package->getDistType(), $packageDir);
 
-        $this->extractWithZipArchive($filePath, $packageDir);
-        @unlink($filePath);
+        $promise = $this->extractWithZipArchive($filePath, $packageDir);
+        $promise->then(function () use ($io, $filePath, $packageLockFile, $package) {
+            if (file_exists($filePath)) {
+                @unlink($filePath);
+            }
 
-        $io->writeError('Project has been patched successfully!');
+            $packageLockFile->write([
+                'name' => $package->getName(),
+                'version' => $package->getVersion(),
+            ]);
+
+            $io->writeError(sprintf('Project has been patched with version <info>%s</info> for <info>%s</info>', $package->getPrettyVersion(), $package->getName()));
+        });
 
         return self::SUCCESS;
     }
 
-    protected function selectPackage(
+    private function selectPackage(
         IOInterface $io,
         string $packageName,
         ?string $version = null
@@ -195,7 +224,7 @@ class SelfUpdateCommand extends BaseCommand
     /**
      * Give a meaningful error message to the user.
      */
-    protected function getErrorMessage(int $retval, string $file): string
+    private function getErrorMessage(int $retval, string $file): string
     {
         switch ($retval) {
             case ZipArchive::ER_EXISTS:
